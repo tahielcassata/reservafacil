@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <?!= include('Estilos') ?>
+</head>
+<body>
+<div class="app">
+  <header>
+    <small><?= negocio ?> · Panel del dueño</small>
+    <h1 id="titulo">Entrar</h1>
+  </header>
+
+  <!-- Login -->
+  <main id="login">
+    <label for="clave">Clave del panel</label>
+    <input type="password" id="clave" autocomplete="current-password">
+    <p class="error" id="errLogin"></p>
+    <button class="btn" id="btnEntrar" onclick="entrar()">Entrar</button>
+  </main>
+
+  <div id="panel" class="oculto">
+    <nav class="tabs">
+      <button id="tab-nuevo" class="on" onclick="pestana('nuevo')">Nuevo</button>
+      <button id="tab-agenda" onclick="pestana('agenda')">Agenda</button>
+      <button id="tab-manana" onclick="pestana('manana')">Avisos</button>
+    </nav>
+
+    <!-- Nuevo turno -->
+    <main id="v-nuevo">
+      <p class="aviso-ok oculto" id="okNuevo"></p>
+      <label for="nDia" style="margin-top:0">Día</label>
+      <select id="nDia" onchange="$('okNuevo').classList.add('oculto'); cargarHorasNuevo()"></select>
+      <label>Horario (solo libres)</label>
+      <div id="nHoras" class="grid"></div>
+      <label for="nNombre">Nombre del cliente</label>
+      <input type="text" id="nNombre" list="clientes" maxlength="60" autocomplete="off">
+      <datalist id="clientes"></datalist>
+      <label for="nCel">Celular (sin 0 ni 15)</label>
+      <input type="tel" id="nCel" placeholder="11 2345 6789" maxlength="20">
+      <label class="check"><input type="checkbox" id="nAviso" checked> Avisarle por WhatsApp el día anterior</label>
+      <p class="error" id="errNuevo"></p>
+      <button class="btn" onclick="guardar('turno')">Guardar turno</button>
+      <div class="fila2">
+        <button class="btn sec" onclick="guardar('bloqueo')">Bloquear horario</button>
+        <button class="btn sec" onclick="bloquearDia()">Bloquear día</button>
+      </div>
+      <div id="bloqueoBox" class="caja oculto"></div>
+    </main>
+
+    <!-- Agenda -->
+    <main id="v-agenda" class="oculto">
+      <label for="aDia" style="margin-top:0">Día</label>
+      <select id="aDia" onchange="$('agendaAviso').innerHTML = ''; cargarAgenda()"></select>
+      <div id="agendaAviso"></div>
+      <div id="agenda"></div>
+    </main>
+
+    <!-- Recordatorios -->
+    <main id="v-manana" class="oculto">
+      <h2 id="mTitulo">Turnos de mañana</h2>
+      <p class="nota" id="mCuenta"></p>
+      <div id="manana"></div>
+      <button class="btn sec" onclick="cargarManana()">Actualizar</button>
+    </main>
+    <div style="padding:0 20px 24px"><button class="mini" style="width:100%;height:42px" onclick="salir()">Salir del panel</button></div>
+  </div>
+</div>
+
+<script>
+  var clave = '', clientes = {}, horaNuevo = null, pedido = { horas: 0, agenda: 0, manana: 0 };
+  function $(id) { return document.getElementById(id); }
+  function celValido(c) { var d = c.replace(/\D/g, '').length; return /^[\d\s()+.\-]+$/.test(c) && d >= 8 && d <= 13; }
+  function salir() { try { localStorage.removeItem('rf_clave'); } catch (x) {} location.reload(); }
+
+  function mensaje(cont, clase, texto) {
+    cont.innerHTML = '';
+    var p = document.createElement('p'); p.className = clase; p.textContent = texto; cont.appendChild(p);
+  }
+  function el(tag, clase, texto) {
+    var e = document.createElement(tag);
+    if (clase) e.className = clase;
+    if (texto != null) e.textContent = texto;
+    return e;
+  }
+  function api(nombre) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    return new Promise(function (ok, mal) {
+      var r = google.script.run.withSuccessHandler(ok).withFailureHandler(mal);
+      r[nombre].apply(r, args);
+    });
+  }
+  function fallo(e) {
+    if (String(e && e.message).indexOf('Clave') !== -1) { try { localStorage.removeItem('rf_clave'); } catch (x) {} location.reload(); }
+    else alert('No se pudo completar. Revisá la conexión y probá de nuevo.');
+  }
+
+  /* ---------- Login ---------- */
+  function entrar(guardada) {
+    var c = guardada || $('clave').value;
+    if (!c) { $('errLogin').textContent = 'Escribí la clave.'; return; }
+    $('btnEntrar').disabled = true;
+    api('apiAdminLogin', c).then(function (r) {
+      $('btnEntrar').disabled = false;
+      if (!r.ok) { $('errLogin').textContent = 'Clave incorrecta.'; try { localStorage.removeItem('rf_clave'); } catch (x) {} return; }
+      clave = c;
+      try { localStorage.setItem('rf_clave', c); } catch (x) {}
+      clientes = r.clientes || {};
+      var dl = $('clientes'); dl.innerHTML = '';
+      Object.keys(clientes).sort().forEach(function (n) { var o = document.createElement('option'); o.value = n; dl.appendChild(o); });
+      ['nDia', 'aDia'].forEach(function (id) {
+        var s = $(id); s.innerHTML = '';
+        r.dias.forEach(function (d) { var o = document.createElement('option'); o.value = d.fecha; o.textContent = d.etiqueta; s.appendChild(o); });
+      });
+      $('login').classList.add('oculto');
+      $('panel').classList.remove('oculto');
+      pestana('nuevo');
+    }).catch(function () { $('btnEntrar').disabled = false; $('errLogin').textContent = 'No se pudo conectar.'; });
+  }
+
+  function pestana(p) {
+    ['nuevo', 'agenda', 'manana'].forEach(function (x) {
+      $('v-' + x).classList.toggle('oculto', x !== p);
+      $('tab-' + x).classList.toggle('on', x === p);
+    });
+    $('titulo').textContent = { nuevo: 'Nuevo turno', agenda: 'Agenda', manana: 'Recordatorios' }[p];
+    $('okNuevo').classList.add('oculto');
+    if (p === 'nuevo') cargarHorasNuevo();
+    if (p === 'agenda') cargarAgenda();
+    if (p === 'manana') cargarManana();
+  }
+
+  /* ---------- Nuevo turno ---------- */
+  function cargarHorasNuevo() {
+    horaNuevo = null;
+    var c = $('nHoras'), mio = ++pedido.horas;
+    mensaje(c, 'cargando', 'Buscando horarios…');
+    api('apiAdminHorarios', clave, $('nDia').value).then(function (horas) {
+      if (mio !== pedido.horas) return;
+      c.innerHTML = '';
+      if (!horas.length) return mensaje(c, 'vacio', 'No quedan horarios libres este día.');
+      horas.forEach(function (h) {
+        var b = el('button', 'op', h);
+        b.onclick = function () {
+          horaNuevo = h;
+          Array.prototype.forEach.call(c.children, function (x) { x.classList.toggle('sel', x === b); });
+          $('errNuevo').textContent = '';
+        };
+        c.appendChild(b);
+      });
+    }).catch(fallo);
+  }
+
+  $('nNombre').addEventListener('input', function () {
+    var cel = clientes[this.value];
+    if (cel) $('nCel').value = cel;
+    $('errNuevo').textContent = '';
+  });
+
+  function guardar(tipo) {
+    var nombre = $('nNombre').value.trim();
+    if (!horaNuevo) { $('errNuevo').textContent = 'Elegí un horario.'; return; }
+    if (tipo === 'turno') {
+      var cel = $('nCel').value.trim();
+      if (nombre.length < 2) { $('errNuevo').textContent = 'El nombre es muy corto.'; return; }
+      if (cel && !celValido(cel)) { $('errNuevo').textContent = 'Revisá el celular: solo números, por ejemplo 11 2345 6789.'; return; }
+      if (!cel && $('nAviso').checked) { $('errNuevo').textContent = 'Para avisarle por WhatsApp cargá el celular (o destildá el aviso).'; return; }
+    }
+    var etiquetaDia = $('nDia').options[$('nDia').selectedIndex].text, hora = horaNuevo;
+    api('apiAdminGuardar', clave, {
+      tipo: tipo, fecha: $('nDia').value, hora: hora,
+      nombre: tipo === 'bloqueo' ? (nombre || 'Bloqueado') : nombre,
+      celular: $('nCel').value.trim(), aviso: $('nAviso').checked
+    }).then(function (r) {
+      if (!r.ok) { $('errNuevo').textContent = r.msg; if (r.ocupado) cargarHorasNuevo(); return; }
+      if (tipo === 'turno' && $('nCel').value.trim()) clientes[nombre] = $('nCel').value.trim();
+      var ok = $('okNuevo');
+      ok.textContent = tipo === 'turno'
+        ? '✓ Turno guardado: ' + nombre + ', ' + etiquetaDia + ' a las ' + hora + ' hs'
+        : '✓ Horario bloqueado: ' + etiquetaDia + ' a las ' + hora + ' hs';
+      ok.classList.remove('oculto');
+      $('nNombre').value = ''; $('nCel').value = ''; $('nAviso').checked = true;
+      cargarHorasNuevo();
+      window.scrollTo(0, 0);
+    }).catch(fallo);
+  }
+
+  /* ---------- Bloquear día (con aviso a los clientes que ya tenían turno) ---------- */
+  function botonWa(href, texto) {
+    var a = el('a', 'mini wa', texto || 'Avisar');
+    a.href = href; a.target = '_blank'; a.rel = 'noopener';
+    a.onclick = function () { setTimeout(function () { a.className = 'ok'; a.textContent = '✓ Enviado'; a.removeAttribute('href'); }, 300); };
+    return a;
+  }
+
+  function filaTurno(t, derecha) {
+    var f = el('div', 'fila');
+    f.appendChild(el('div', 'h', t.hora));
+    var n = el('div', 'n', t.nombre);
+    if (t.celular) n.appendChild(el('span', '', t.celular));
+    f.appendChild(n);
+    if (derecha) f.appendChild(derecha);
+    return f;
+  }
+
+  function bloquearDia() {
+    var fecha = $('nDia').value, etiqueta = $('nDia').options[$('nDia').selectedIndex].text;
+    var box = $('bloqueoBox');
+    box.innerHTML = ''; box.classList.remove('oculto');
+    box.appendChild(el('p', 'cargando', 'Revisando los turnos del ' + etiqueta + '…'));
+    api('apiAdminTurnosDia', clave, fecha).then(function (turnos) {
+      box.innerHTML = '';
+      box.appendChild(el('h2', '', 'Bloquear el ' + etiqueta));
+      if (!turnos.length) {
+        box.appendChild(el('p', 'nota', 'Ese día no hay turnos dados. Se van a bloquear todos los horarios libres.'));
+        box.appendChild(boton('Bloquear día', 'btn', function () { ejecutarBloqueo(fecha, etiqueta, false); }));
+      } else {
+        box.appendChild(el('p', 'nota', 'Ese día ya hay ' + turnos.length + (turnos.length === 1 ? ' turno dado:' : ' turnos dados:')));
+        turnos.forEach(function (t) { box.appendChild(filaTurno(t)); });
+        box.appendChild(boton('Bloquear y cancelar estos turnos', 'btn', function () { ejecutarBloqueo(fecha, etiqueta, true); }));
+        box.appendChild(el('p', 'nota', 'Después te aparece un botón para avisarle a cada cliente por WhatsApp.'));
+        box.appendChild(boton('Bloquear solo los horarios libres', 'btn sec', function () { ejecutarBloqueo(fecha, etiqueta, false); }));
+      }
+      box.appendChild(boton('Volver', 'btn sec', function () { box.classList.add('oculto'); }));
+      box.scrollIntoView({ behavior: 'smooth' });
+    }).catch(fallo);
+  }
+
+  function boton(texto, clase, fn) { var b = el('button', clase, texto); b.onclick = fn; return b; }
+
+  function ejecutarBloqueo(fecha, etiqueta, cancelar) {
+    var box = $('bloqueoBox');
+    box.innerHTML = '';
+    box.appendChild(el('p', 'cargando', 'Bloqueando…'));
+    api('apiAdminBloquearDia', clave, fecha, $('nNombre').value.trim() || 'Día bloqueado', cancelar).then(function (r) {
+      box.innerHTML = '';
+      box.appendChild(el('p', 'aviso-ok', '✓ ' + etiqueta + ' bloqueado' +
+        (r.afectados.length ? ' · ' + r.afectados.length + ' turnos cancelados' : '')));
+      if (r.afectados.length) {
+        box.appendChild(el('h2', '', 'Avisá a los clientes'));
+        r.afectados.forEach(function (t) {
+          box.appendChild(filaTurno(t, t.wa ? botonWa(t.wa) : el('span', 'tag t-Bloqueo', 'Sin celular')));
+        });
+        box.appendChild(el('p', 'nota', 'Cada botón abre WhatsApp con el mensaje escrito. Los turnos cancelados siguen en la planilla.'));
+      }
+      box.appendChild(boton('Listo', 'btn sec', function () { box.classList.add('oculto'); }));
+      cargarHorasNuevo();
+    }).catch(fallo);
+  }
+
+  /* ---------- Agenda ---------- */
+  var ORIGEN = { Online: 'Reservó online', 'Dueño': 'Cargado por vos', Bloqueo: 'Bloqueado' };
+
+  function cargarAgenda() {
+    var c = $('agenda'), mio = ++pedido.agenda;
+    mensaje(c, 'cargando', 'Cargando…');
+    api('apiAdminAgenda', clave, $('aDia').value).then(function (lista) {
+      if (mio !== pedido.agenda) return;
+      c.innerHTML = '';
+      if (!lista.length) return mensaje(c, 'vacio', 'No hay turnos este día.');
+      lista.forEach(function (t) {
+        var f = el('div', 'fila');
+        f.appendChild(el('div', 'h', t.hora));
+        var n = el('div', 'n', t.nombre || '—');
+        if (t.celular) n.appendChild(el('span', '', t.celular));
+        f.appendChild(n);
+        var tag = el('span', 'tag t-' + t.origen, ORIGEN[t.origen] || t.origen);
+        f.appendChild(tag);
+        var x = el('button', 'mini', t.origen === 'Bloqueo' ? 'Liberar' : 'Cancelar');
+        x.onclick = function () {
+          // Confirmación dentro de la página (sin el cartel del navegador)
+          var conf = el('span', 'confirmar');
+          var si = el('button', 'mini peligro', t.origen === 'Bloqueo' ? 'Sí, liberar' : 'Sí, cancelar');
+          var no = el('button', 'mini', 'No');
+          conf.appendChild(si); conf.appendChild(no);
+          tag.style.display = 'none';
+          f.replaceChild(conf, x);
+          no.onclick = function () { f.replaceChild(x, conf); tag.style.display = ''; };
+          si.onclick = function () { si.disabled = true; no.disabled = true; si.textContent = '…'; confirmado(); };
+        };
+        var confirmado = function () {
+          api('apiAdminCancelar', clave, t.id).then(function (r) {
+            var av = $('agendaAviso'); av.innerHTML = '';
+            if (r.wa) {
+              var caja = el('div', 'caja');
+              caja.appendChild(el('p', '', 'Turno cancelado. Avisale a ' + r.nombre + ' que se canceló el de las ' + r.hora + ':'));
+              caja.appendChild(botonWa(r.wa, 'Avisar por WhatsApp'));
+              av.appendChild(caja);
+            }
+            cargarAgenda();
+          }).catch(fallo);
+        };
+        f.appendChild(x);
+        c.appendChild(f);
+      });
+    }).catch(fallo);
+  }
+
+  /* ---------- Recordatorios de mañana ---------- */
+  function cargarManana() {
+    var c = $('manana'), mio = ++pedido.manana;
+    mensaje(c, 'cargando', 'Cargando…');
+    api('apiAdminManana', clave).then(function (r) {
+      if (mio !== pedido.manana) return;
+      $('mTitulo').textContent = (r.esManana ? 'Turnos de mañana · ' : 'Próximo día de atención · ') + r.etiqueta;
+      c.innerHTML = '';
+      var pendientes = r.turnos.filter(function (t) { return t.wa && t.avisado !== 'Sí'; }).length;
+      var avisados = r.turnos.filter(function (t) { return t.avisado === 'Sí'; }).length;
+      $('mCuenta').textContent = r.turnos.length ? (avisados + ' avisados · ' + pendientes + ' por avisar') : '';
+      if (!r.turnos.length) return mensaje(c, 'vacio', 'Ese día todavía no hay turnos.');
+      r.turnos.forEach(function (t) {
+        var f = el('div', 'fila');
+        f.appendChild(el('div', 'h', t.hora));
+        var n = el('div', 'n', t.nombre);
+        n.appendChild(el('span', '', ORIGEN[t.origen] || ''));
+        f.appendChild(n);
+        if (t.avisado === 'Sí') f.appendChild(el('span', 'ok', '✓ Avisado'));
+        else if (!t.wa) f.appendChild(el('span', 'tag t-Bloqueo', 'Sin aviso'));
+        else {
+          var a = el('a', 'mini wa', 'Enviar');
+          a.href = t.wa; a.target = '_blank'; a.rel = 'noopener';
+          a.onclick = function () {
+            api('apiAdminMarcarAvisado', clave, t.id).then(function () { setTimeout(cargarManana, 800); }).catch(fallo);
+          };
+          f.appendChild(a);
+        }
+        c.appendChild(f);
+      });
+    }).catch(fallo);
+  }
+
+  $('clave').addEventListener('keydown', function (e) { if (e.key === 'Enter') entrar(); });
+  $('clave').addEventListener('input', function () { $('errLogin').textContent = ''; });
+  try { var g = localStorage.getItem('rf_clave'); if (g) entrar(g); } catch (x) {}
+</script>
+</body>
+</html>

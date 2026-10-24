@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <?!= include('Estilos') ?>
+</head>
+<body>
+<div class="app">
+  <header>
+    <small><?= negocio ?></small>
+    <h1>Reservá tu turno</h1>
+    <div class="pasos"><span id="p1" class="on"></span><span id="p2"></span><span id="p3"></span></div>
+  </header>
+
+  <main>
+    <!-- Paso 1: día -->
+    <section id="s1">
+      <h2>¿Qué día te queda bien?</h2>
+      <div id="dias" class="grid"></div>
+    </section>
+
+    <!-- Paso 2: horario -->
+    <section id="s2" class="oculto">
+      <h2>Elegí el horario</h2>
+      <p class="nota" id="diaElegido"></p>
+      <p class="error" id="avisoOcupado"></p>
+      <div id="horas" class="grid"></div>
+      <button class="btn sec" onclick="ir(1)">← Cambiar día</button>
+    </section>
+
+    <!-- Paso 3: datos -->
+    <section id="s3" class="oculto">
+      <h2>Tus datos</h2>
+      <div class="resumen" id="resumen"></div>
+      <label for="nombre">Nombre y apellido</label>
+      <input type="text" id="nombre" maxlength="60" autocomplete="name" placeholder="Hasta 60 letras">
+      <label for="celular">Celular (sin 0 ni 15)</label>
+      <input type="tel" id="celular" placeholder="11 2345 6789" maxlength="20" autocomplete="tel">
+      <label class="check"><input type="checkbox" id="aviso" checked> Quiero que me recuerden el turno por WhatsApp el día anterior</label>
+      <p class="error" id="error"></p>
+      <button class="btn" id="confirmar" onclick="confirmar()">Confirmar turno</button>
+      <button class="btn sec" onclick="ir(2)">← Cambiar horario</button>
+    </section>
+
+    <!-- Paso 4: listo -->
+    <section id="s4" class="oculto centro">
+      <div class="tilde">✓</div>
+      <h2>¡Turno reservado!</h2>
+      <p id="final" style="font-size:16px;color:#5b6570;line-height:1.5"></p>
+      <a class="btn wa" id="waNegocio" target="_blank">Avisar al negocio por WhatsApp</a>
+      <button class="btn sec" onclick="empezar()">Reservar otro turno</button>
+    </section>
+  </main>
+</div>
+
+<script>
+  var estado = {};
+  function $(id) { return document.getElementById(id); }
+
+  function ir(n) {
+    for (var i = 1; i <= 4; i++) $('s' + i).classList.toggle('oculto', i !== n);
+    for (var j = 1; j <= 3; j++) $('p' + j).classList.toggle('on', j <= n);
+    window.scrollTo(0, 0);
+  }
+
+  function mensaje(cont, clase, texto) {
+    cont.innerHTML = '';
+    var p = document.createElement('p');
+    p.className = clase;
+    p.textContent = texto;
+    cont.appendChild(p);
+  }
+
+  function boton(texto, sub, alTocar) {
+    var b = document.createElement('button');
+    b.className = 'op';
+    b.textContent = texto;
+    if (sub) { var s = document.createElement('small'); s.textContent = sub; b.appendChild(s); }
+    b.onclick = alTocar;
+    return b;
+  }
+
+  function empezar() {
+    estado = {};
+    $('nombre').value = ''; $('celular').value = ''; $('aviso').checked = true; $('error').textContent = '';
+    ir(1);
+    var c = $('dias');
+    mensaje(c, 'cargando', 'Cargando días…');
+    google.script.run
+      .withSuccessHandler(function (dias) {
+        c.innerHTML = '';
+        if (!dias.length) return mensaje(c, 'vacio', 'No hay turnos disponibles por ahora.');
+        dias.forEach(function (d) {
+          c.appendChild(boton(d.etiqueta, d.libres + (d.libres === 1 ? ' libre' : ' libres'), function () { elegirDia(d); }));
+        });
+      })
+      .withFailureHandler(function () { mensaje(c, 'error', 'No se pudo cargar. Probá de nuevo en un rato.'); })
+      .apiDias();
+  }
+
+  function elegirDia(d, avisoOcupado) {
+    estado.dia = d;
+    $('diaElegido').textContent = d.etiqueta + ' · solo se muestran los horarios libres';
+    $('avisoOcupado').textContent = avisoOcupado || '';
+    var c = $('horas');
+    mensaje(c, 'cargando', 'Buscando horarios…');
+    ir(2);
+    google.script.run
+      .withSuccessHandler(function (horas) {
+        c.innerHTML = '';
+        if (!horas.length) return mensaje(c, 'vacio', 'Ya no quedan horarios este día. Elegí otro.');
+        horas.forEach(function (h) { c.appendChild(boton(h, '', function () { elegirHora(h); })); });
+      })
+      .withFailureHandler(function () { mensaje(c, 'error', 'No se pudo cargar. Probá de nuevo.'); })
+      .apiHorarios(d.fecha);
+  }
+
+  function elegirHora(h) {
+    estado.hora = h;
+    var r = $('resumen');
+    r.innerHTML = '';
+    [['Día: ', estado.dia.etiqueta], ['Hora: ', h + ' hs']].forEach(function (x) {
+      var div = document.createElement('div');
+      var b = document.createElement('b'); b.textContent = x[0];
+      div.appendChild(b); div.appendChild(document.createTextNode(x[1]));
+      r.appendChild(div);
+    });
+    $('error').textContent = '';
+    $('avisoOcupado').textContent = '';
+    ir(3);
+  }
+
+  function confirmar() {
+    var nombre = $('nombre').value.trim();
+    var cel = $('celular').value.trim();
+    var dig = cel.replace(/\D/g, '').length;
+    if (!nombre) { $('error').textContent = 'Escribí tu nombre.'; return; }
+    if (nombre.length < 2) { $('error').textContent = 'El nombre es muy corto.'; return; }
+    if (!/^[\d\s()+.\-]+$/.test(cel) || dig < 8 || dig > 13) { $('error').textContent = 'Revisá el celular: solo números, por ejemplo 11 2345 6789.'; return; }
+    var b = $('confirmar');
+    b.disabled = true; b.textContent = 'Reservando…';
+    google.script.run
+      .withSuccessHandler(function (r) {
+        b.disabled = false; b.textContent = 'Confirmar turno';
+        if (!r.ok) {
+          if (r.ocupado) return elegirDia(estado.dia, r.msg);
+          $('error').textContent = r.msg; return;
+        }
+        $('final').textContent = r.nombre + ', te esperamos el ' + r.etiqueta + ' a las ' + r.hora + ' hs.';
+        var wa = $('waNegocio');
+        if (r.waNegocio) { wa.href = r.waNegocio; wa.classList.remove('oculto'); }
+        else wa.classList.add('oculto');
+        ir(4);
+      })
+      .withFailureHandler(function () {
+        b.disabled = false; b.textContent = 'Confirmar turno';
+        $('error').textContent = 'No se pudo reservar. Probá de nuevo.';
+      })
+      .apiReservar({ fecha: estado.dia.fecha, hora: estado.hora, nombre: nombre, celular: cel, aviso: $('aviso').checked });
+  }
+
+  ['nombre', 'celular'].forEach(function (id) { $(id).addEventListener('input', function () { $('error').textContent = ''; }); });
+  empezar();
+</script>
+</body>
+</html>
