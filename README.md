@@ -84,3 +84,7 @@ Guía completa: [docs/INSTALACION.md](docs/INSTALACION.md)
 ## 👤 Autor
 
 **Tahiel Cassata**, estudiante de la Tecnicatura Superior en Análisis de Sistemas.
+
+## Licencia
+
+© 2026 Tahiel Cassata. **Todos los derechos reservados.** El código está publicado para que se pueda ver como parte de mi portfolio, pero no está permitido usarlo, copiarlo, instalarlo para terceros ni venderlo sin mi autorización por escrito. Ver [LICENSE](LICENSE).
